@@ -766,7 +766,7 @@ sub make_reddit_comment {
    # Post comment with mirror link
    #
    my $links = join( "  \n", @links );
-   my $comment_text = uri_escape( "[](/nmm)$links  \n  \n[](/sp)  \n  \n---  \n  \n^(This is a bot | )[^Info](/r/mylittlepony/comments/1lwzub/deviantart_imgur_mirror_bot_nightmirrormoon/)^( | )[^(Report problems)](/message/compose/?to=$conf->{maintainer}&subject=$conf->{reddit_account})^( | )[^(Source code)](https://github.com/meditonsin/NightMirrorMoon)" );
+   my $comment_text = uri_escape( "[](/mirrorportal)$links  \n  \n---  \n  \n^(This is a bot | )[^Info](/r/mylittlepony/comments/1lwzub/deviantart_imgur_mirror_bot_nightmirrormoon/)^( | )[^(Report problems)](/message/compose/?to=$conf->{maintainer}&subject=$conf->{reddit_account})^( | )[^(Source code)](https://github.com/meditonsin/NightMirrorMoon) \n  \n---  \n   ^(If you would like to avoid seeing notifications from this bot, )[^(please request a PM so that you can block it.)](/message/compose/?to=$conf->{maintainer}&subject=$conf->{reddit_account})" );
    my $comment_query = "text=$comment_text&thing_id=$post&api_type=json";
    $r->request( "POST", "/api/comment?$comment_query" );
    if ( $r->responseCode != 200 ) {
@@ -807,7 +807,7 @@ my $lastrun = get_lastrun();
 # so we can try again on the posts that didn't work out
 my $errors = 0;
 
-my $posts = get_reddit( $reddit, "/r/$conf->{subreddit}/new/.json" );
+my $posts = get_reddit( $reddit, "/r/$conf->{subreddit}/new/.json?limit=100" );
 my $now = time();
 if ( ! $posts ) {
    exit;
