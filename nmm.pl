@@ -93,7 +93,7 @@ my $pidfile = File::Pid->new({
    file => $conf->{pid_file}
 });
 
-if ( $pidfile->running ) {
+if ( -f $conf->{pid_file} and $pidfile->running ) {
    die "Already running";
 }
 
