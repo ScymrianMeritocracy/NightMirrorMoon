@@ -58,7 +58,7 @@ foreach my $key ( @{[ 'maintainer', 'useragent', 'imgur_appid', 'tumblr_api_key'
 #
 # Check optional config arrays
 #
-foreach my $key ( @{[ 'ignore_artists', 'ignore_tumblrs', 'ignore_submitters' ]} ) {
+foreach my $key ( @{[ 'ignore_artists', 'ignore_tumblrs', 'ignore_pixiv', 'ignore_submitters' ]} ) {
    if ( defined $conf->{$key} and ! ref $conf->{$key} eq 'ARRAY' ) {
       die "Error in $config_file: $key must be an array, when defined";
    }
@@ -86,7 +86,6 @@ if ( ! $conf->{max_retries} ) {
    $conf->{max_retries} = 5;
 }
 
-
 #
 # Prevent multiple instances from running at the same time
 #
@@ -94,7 +93,7 @@ my $pidfile = File::Pid->new({
    file => $conf->{pid_file}
 });
 
-if ( $pidfile->running ) {
+if ( -f $conf->{pid_file} and $pidfile->running ) {
    die "Already running";
 }
 
@@ -140,6 +139,9 @@ $gfy->getUseragent->agent( $conf->{useragent} );
 
 my $tumblr = REST::Client->new( { host => "http://api.tumblr.com/v2" } );
 $tumblr->getUseragent->agent( $conf->{useragent} );
+
+my $pixiv = REST::Client->new( { host => "http://spapi.pixiv.net" } );
+$pixiv->getUseragent->agent( $conf->{useragent} );
 
 my $lastrunfile = "$0.lastrun";
 my $logfile = "$0.log";
@@ -330,6 +332,62 @@ sub get_tumblr {
       return $post->{response}->{posts}->[0];
    }
    return undef;
+}
+
+#
+# Get post from pixiv
+#
+sub get_pixiv {
+   my $r = shift;
+   my $url = shift;
+   my $artist;
+   my $title;
+   my @ret;
+
+   unless ( $url =~ /^https?:\/\/www\.pixiv\.net\/member_illust\.php\?mode=(?:medium|manga)&amp;illust_id=(\d+)$/i ) {
+      return undef;
+   }
+   my $post_id = $1;
+
+   if ( index( $url, "manga" ) != -1 ) {
+      $r->request( "GET", "/iphone/manga.php?illust_id=$post_id" );
+   } else {
+      $r->request( "GET", "/iphone/illust.php?illust_id=$post_id" );
+   }
+   if ( $r->responseCode != 200 ) {
+      raise_error( "get_pixiv(): Couldn't fetch info for $url; Got HTTP " . $r->responseCode );
+   }
+
+   my @list = split( "\n", $r->responseContent );
+   foreach my $item ( @list ) {
+      my @attrs = split( ",", $item );
+      $artist = substr( $attrs[5], 1, -1 );
+      $title = substr( $attrs[3], 1, -1 ) . " by " . $artist;
+      my $suffix = substr( $attrs[2], 1, -1 );
+      my $decoy = substr( $attrs[9], 1, -5 );
+
+      my $page = substr( $decoy, -3 );
+      $page =~ s/_//g;
+      if ( ! ( $page =~ /^p[0-9]+$/i ) ) {
+         $page = "p0";
+      }
+         
+      unless ( $decoy =~ /^(https?:\/\/.*\.pixiv\.net\/).*(\/img\/.*$post_id).*$/i ) {
+         next;
+      }
+      my $orig = $1 . "img-original" . $2 . "_$page" . ".$suffix";
+
+      push @ret, $orig;
+   }
+   push @ret, $title;
+      
+   foreach my $p ( @{$conf->{ignore_pixiv}} ) {
+      if ( $artist =~ /^\Q$p\E$/i ) {
+         return undef;
+      }
+   }
+
+   return @ret;
 }
 
 #
@@ -615,6 +673,35 @@ sub mirror_tumblr {
 }
 
 #
+# Make imgur mirror of a pixiv post
+#
+sub mirror_pixiv {
+   my $r = shift;
+   my $imgur = shift;
+   my $px_link = shift;
+
+   my @photos = get_pixiv( $r, $px_link );
+   my $title = pop @photos;
+
+   if ( ! $title ) {
+      return undef;
+   }
+
+   my $mirror = make_imgur_album(
+      $imgur,
+      $title,
+      "These images were reuploaded by a bot on reddit.com/r/$conf->{subreddit} from Pixiv. The original can be found here: $px_link",
+      @photos
+   );
+
+   if ( $mirror && $mirror->{data} ) {
+      $mirror->{data}->{tumblr} = $title;
+      return $mirror;
+   }
+   return undef;
+}
+
+#
 # Mirror deviantart to imgur
 #
 sub mirror_da {
@@ -815,7 +902,7 @@ if ( ! $posts ) {
 foreach my $post ( @{$posts->{data}->{children}} ) {
    # Skip non-DA posts
    # Direct links are deviantart.net, which are already taken care of by Trixie
-   if ( $post->{data}->{domain} !~ /(deviantart\.com|fav\.me|imgur\.com|tumblr\.com)$/i ) {
+   if ( $post->{data}->{domain} !~ /(deviantart\.com|fav\.me|imgur\.com|tumblr\.com|pixiv\.net)$/i ) {
       next;
    }
 
@@ -862,6 +949,8 @@ foreach my $post ( @{$posts->{data}->{children}} ) {
          $mirror = mirror_imgur( $imgur, $gfy, $post->{data}->{url} );
       } elsif ( $post->{data}->{domain} =~ /tumblr\.com$/i ) {
          $mirror = mirror_tumblr( $tumblr, $imgur, $post->{data}->{url} );
+      } elsif ( $post->{data}->{domain} =~ /pixiv\.net$/i ) {
+         $mirror = mirror_pixiv( $pixiv, $imgur, $post->{data}->{url} );
       } else {
          $mirror = mirror_da( $imgur, $deviantart, $gfy, $post->{data}->{url} );
       }
