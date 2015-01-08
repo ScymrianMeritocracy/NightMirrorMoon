@@ -695,7 +695,7 @@ sub mirror_pixiv {
    my $mirror = make_imgur_album(
       $imgur,
       $title,
-      "These images were reuploaded by a bot on reddit.com/r/$conf->{subreddit} from Pixiv. The original can be found here: $px_link",
+      "These images were reuploaded by a bot on reddit.com/r/$conf->{subreddit} from pixiv. The original can be found here: $px_link",
       @photos
    );
 

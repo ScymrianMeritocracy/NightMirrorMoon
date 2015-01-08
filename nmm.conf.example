@@ -7,7 +7,7 @@
    ignore_tumblrs    => [
    ],
    
-   # Don't make mirrors of these Pixiv artists
+   # Don't make mirrors of these pixiv artists
    ignore_pixiv      => [
    ],
    
