@@ -344,6 +344,11 @@ sub get_pixiv {
    my $title;
    my @ret;
 
+   # we won't get flagged works when unauthenticated
+   if ( $conf->{mature_only} ) {
+      return undef;
+   }
+
    unless ( $url =~ /^https?:\/\/www\.pixiv\.net\/member_illust\.php\?mode=(?:medium|manga)&amp;illust_id=(\d+)$/i ) {
       return undef;
    }
