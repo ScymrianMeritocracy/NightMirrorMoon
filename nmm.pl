@@ -344,20 +344,29 @@ sub get_pixiv {
    my $title;
    my @ret;
 
+   # we won't get flagged works when unauthenticated
+   if ( $conf->{mature_only} ) {
+      return undef;
+   }
+
    unless ( $url =~ /^https?:\/\/www\.pixiv\.net\/member_illust\.php\?mode=(?:medium|manga)&amp;illust_id=(\d+)$/i ) {
       return undef;
    }
    my $post_id = $1;
 
-   if ( index( $url, "manga" ) != -1 ) {
-      $r->request( "GET", "/iphone/manga.php?illust_id=$post_id" );
-   } else {
-      $r->request( "GET", "/iphone/illust.php?illust_id=$post_id" );
-   }
+   $r->request( "GET", "/iphone/manga.php?illust_id=$post_id" );
    if ( $r->responseCode != 200 ) {
-      raise_error( "get_pixiv(): Couldn't fetch info for $url; Got HTTP " . $r->responseCode );
+      raise_error( "get_pixiv(): Couldn't fetch manga info for $url; Got HTTP " . $r->responseCode );
+   }
+   if ( ! $r->responseContent ) {
+      $r->request( "GET", "/iphone/illust.php?illust_id=$post_id" );
+      if ( $r->responseCode != 200 ) {
+         raise_error( "get_pixiv(): Couldn't fetch illustration info for $url; Got HTTP " . $r->responseCode );
+      }
    }
 
+   # since a "manga" is a list of single links,
+   # just iterate whatever we got
    my @list = split( "\n", $r->responseContent );
    foreach my $item ( @list ) {
       my @attrs = split( ",", $item );
@@ -366,16 +375,10 @@ sub get_pixiv {
       my $suffix = substr( $attrs[2], 1, -1 );
       my $decoy = substr( $attrs[9], 1, -5 );
 
-      my $page = substr( $decoy, -3 );
-      $page =~ s/_//g;
-      if ( ! ( $page =~ /^p[0-9]+$/i ) ) {
-         $page = "p0";
-      }
-         
-      unless ( $decoy =~ /^(https?:\/\/.*\.pixiv\.net\/).*(\/img\/.*$post_id).*$/i ) {
+      my $orig = munge_pxurl( $decoy, $post_id, $suffix );
+      if ( ! $orig ) {
          next;
       }
-      my $orig = $1 . "img-original" . $2 . "_$page" . ".$suffix";
 
       push @ret, $orig;
    }
@@ -388,6 +391,40 @@ sub get_pixiv {
    }
 
    return @ret;
+}
+
+#
+# pixiv has several different forms of original image url :\
+#
+sub munge_pxurl {
+   my $decoy = shift;
+   my $post_id = shift;
+   my $suffix = shift;
+
+   my $page = substr( $decoy, -3 );
+   $page =~ s/_//g;
+   if ( ! ( $page =~ /^p[0-9]+$/i ) ) {
+      if ( index( $decoy, "mobile" ) != -1 ) {
+         $page = "";
+      } else {
+         $page = "p0";
+      }
+   }
+
+   my $orig;
+   if ( $decoy =~ /^(https?:\/\/.*\.pixiv\.net\/.*\/)mobile\/$post_id.*$/i ) {
+      if ( $page ) {
+         $orig = $1 . $post_id . "_big_" . $page . ".$suffix";
+      } else {
+         $orig = $1 . $post_id . ".$suffix";
+      }
+   } elsif ( $decoy =~ /^(https?:\/\/.*\.pixiv\.net\/).*(\/img\/.*$post_id).*$/i ) {
+      $orig = $1 . "img-original" . $2 . "_$page" . ".$suffix";
+   } else {
+      return undef;
+   }
+
+   return $orig;
 }
 
 #
@@ -690,7 +727,7 @@ sub mirror_pixiv {
    my $mirror = make_imgur_album(
       $imgur,
       $title,
-      "These images were reuploaded by a bot on reddit.com/r/$conf->{subreddit} from Pixiv. The original can be found here: $px_link",
+      "These images were reuploaded by a bot on reddit.com/r/$conf->{subreddit} from pixiv. The original can be found here: $px_link",
       @photos
    );
 
@@ -698,6 +735,7 @@ sub mirror_pixiv {
       $mirror->{data}->{tumblr} = $title;
       return $mirror;
    }
+
    return undef;
 }
 
