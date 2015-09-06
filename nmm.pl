@@ -33,6 +33,9 @@ use LWP::Simple;
 use Mojo::DOM;
 use JSON;
 use Carp;
+use Digest::MD5 qw(md5_hex);
+use LWP::Simple;
+
 
 #
 # Load config file
@@ -114,7 +117,7 @@ my $cj = HTTP::Cookies->new(
    autosave => 1
 );
 
-my $reddit = REST::Client->new( { host => "http://www.reddit.com" } );
+my $reddit = REST::Client->new( { host => "https://www.reddit.com" } );
 # https://github.com/reddit/reddit/wiki/API
 $reddit->getUseragent->agent( $conf->{useragent} );
 # Need cookies or logins won't last
@@ -136,6 +139,9 @@ $imgur->addHeader( "Authorization", "Client-ID $conf->{imgur_appid}" );
 
 my $gfy = REST::Client->new( { host => "http://upload.gfycat.com" } );
 $gfy->getUseragent->agent( $conf->{useragent} );
+
+my $gfy_verify = REST::Client->new( { host => "http://gfycat.com" } );
+$gfy_verify->getUseragent->agent( $conf->{useragent} );
 
 my $tumblr = REST::Client->new( { host => "http://api.tumblr.com/v2" } );
 $tumblr->getUseragent->agent( $conf->{useragent} );
@@ -240,45 +246,47 @@ sub raise_error {
 sub post_in_log {
    my $check_link = shift;
 
-   if ( ! -f $logfile ) {
-      return 0;
-   }
-
    # Check imgur mirrors
-   open( LOG, "<", $logfile ) or die "Can't open $logfile: $!";
-   while ( my $line = <LOG> ) {
-      chomp( $line );
-      my ( $date, $time, $imgur_id, $imgur_delhash, $reddit_link, $artist ) = split( / /, $line );
-      if ( $check_link eq $reddit_link ) {
-         close( LOG );
-         return 1;
+   if ( -f $logfile ) {
+      open( LOG, "<", $logfile ) or die "Can't open $logfile: $!";
+      while ( my $line = <LOG> ) {
+         chomp( $line );
+         my ( $date, $time, $imgur_id, $imgur_delhash, $reddit_link, $artist ) = split( / /, $line );
+         if ( $check_link eq $reddit_link ) {
+            close( LOG );
+            return 1;
+         }
       }
+      close( LOG );
    }
-   close( LOG );
 
    # Check gfy mirrors
-   open( GFYLOG, "<", $gfy_logfile ) or die "Can't open $gfy_logfile: $!";
-   while ( my $line = <GFYLOG> ) {
-      chomp( $line );
-      my ( $date, $time, $gfyname, $reddit_link, $artist ) = split( / /, $line );
-      if ( $check_link eq $reddit_link ) {
-         close( GFYLOG );
-         return 1;
+   if ( -f $gfy_logfile ) {
+      open( GFYLOG, "<", $gfy_logfile ) or die "Can't open $gfy_logfile: $!";
+      while ( my $line = <GFYLOG> ) {
+         chomp( $line );
+         my ( $date, $time, $gfyname, $reddit_link, $artist ) = split( / /, $line );
+         if ( $check_link eq $reddit_link ) {
+            close( GFYLOG );
+            return 1;
+         }
       }
+      close( GFYLOG );
    }
-   close( GFYLOG );
 
    # Check imgur albums
-   open( TLOG, "<", $tumblr_logfile ) or die "Can't open $tumblr_logfile: $!";
-   while ( my $line = <TLOG> ) {
-      chomp( $line );
-      my ( $date, $time, $imgur_id, $imgur_delhash, $reddit_link, $artist ) = split( / /, $line );
-      if ( $check_link eq $reddit_link ) {
-         close( TLOG );
-         return 1;
+   if ( -f $tumblr_logfile ) {
+      open( TLOG, "<", $tumblr_logfile ) or die "Can't open $tumblr_logfile: $!";
+      while ( my $line = <TLOG> ) {
+         chomp( $line );
+         my ( $date, $time, $imgur_id, $imgur_delhash, $reddit_link, $artist ) = split( / /, $line );
+         if ( $check_link eq $reddit_link ) {
+            close( TLOG );
+            return 1;
+         }
       }
+      close( TLOG );
    }
-   close( TLOG );
 
    return 0;
 }
@@ -574,13 +582,18 @@ sub make_gfy_mirror {
          if ( $response->{error} eq "This gif is not animated!" ) {
             return undef;
          }
+         if ( $response->{error} eq "Oops! Does not appear to be a valid GIF or Video" ) {
+            return undef;
+         }
       }
       if ( ! $response->{gfyname} ) {
-         print STDERR to_json( $response );
+         print STDERR "No gfyname: " . to_json( $response );
          raise_error( "make_gfy_mirror(): Failed to mirror $gif_url to gfy; No gfyname" );
       }
-      push @{$response->{links}}, '[Gfycat mirror](http://gfycat.com/' . $response->{gfyname} . ')';
-      return $response;
+      if ( ! verify_gfy_mirror( $gfy_verify, $gif_url, $response->{gfyname} ) ) {
+         push @{$response->{links}}, '[Gfycat mirror](http://gfycat.com/' . $response->{gfyname} . ')';
+         return $response;
+      }
    }
 
    if ( $retries < $conf->{max_retries} ) {
@@ -591,6 +604,35 @@ sub make_gfy_mirror {
 
    raise_error( "make_gfy_mirror(): Failed to mirror $gif_url to gfy; Got HTTP " . $r->responseCode );
 }
+
+#
+# Verify a gfy mirror
+#
+sub verify_gfy_mirror {
+   my $r = shift;
+   my $gif_url = shift;
+   my $gfyname = shift;
+   my $url = uri_escape( $gif_url );
+
+   $r->request( "GET", "/cajax/get/$gfyname");
+
+   if ( $r->responseCode == 200 ) {
+      my $response = parse_json( $r->responseContent );
+      my $checksum = md5_hex(get($gif_url));
+      if ( ! $response->{gfyItem}->{md5} ) {
+         raise_error( "verify_gfy_mirror(): Got no MD5: " . to_json( $response ) );
+      }
+      if ( $response->{gfyItem}->{md5} and $response->{gfyItem}->{md5} ne $checksum ) {
+         log_error( "verify_gfy_mirror(): Gfy mirror source doesn't match original checksum: $response->{gfyItem}->{url} != $gif_url" );
+         return 0;
+      } else {
+         return 1;
+      }
+   } else {
+      raise_error( "verify_gfy_mirror(): Got HTTP " . $r->responseCode );
+   }
+}
+
 
 #
 # Make imgur mirror
