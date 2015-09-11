@@ -444,6 +444,7 @@ sub get_da {
    my $r = shift;
    my $dalink = shift;
    my $url = uri_escape( $dalink );
+   my $no_scrape = shift;
 
    $r->request( "GET", "/oembed?format=json&url=$url" );
 
@@ -469,13 +470,15 @@ sub get_da {
       }
 
       # To try to make GIFs work
-      my $scraped_image = get_da_scrape( $dalink );
-      if ( $scraped_image ) {
-         # Ignore flash previews
-         if ( $scraped_image eq "FLASH" ) {
-            return undef;
+      if ( ! defined $no_scrape ) {
+         my $scraped_image = get_da_scrape( $dalink );
+         if ( $scraped_image ) {
+            # Ignore flash previews
+            if ( $scraped_image eq "FLASH" ) {
+               return undef;
+            }
+            $response->{url} = $scraped_image;
          }
-         $response->{url} = $scraped_image;
       }
 
       return $response;
@@ -590,7 +593,7 @@ sub make_gfy_mirror {
          print STDERR "No gfyname: " . to_json( $response );
          raise_error( "make_gfy_mirror(): Failed to mirror $gif_url to gfy; No gfyname" );
       }
-      if ( ! verify_gfy_mirror( $gfy_verify, $gif_url, $response->{gfyname} ) ) {
+      if ( verify_gfy_mirror( $gfy_verify, $gif_url, $response->{gfyname} ) ) {
          push @{$response->{links}}, '[Gfycat mirror](http://gfycat.com/' . $response->{gfyname} . ')';
          return $response;
       }
@@ -657,7 +660,7 @@ sub make_imgur_mirror {
       if ( $response->{data}->{error} =~ /^Image is larger than / or
            $response->{data}->{error} =~ /^Animated GIF is larger than / ) {
          log_error( "make_imgur_mirror(): Didn't mirror $url; TOO_LARGE" );
-         return undef;
+         return 'TOO_LARGE';
       }
    }
 
@@ -700,9 +703,10 @@ sub make_imgur_album {
             delete_imgur_album( $r, $album->{data}->{deletehash} );
             raise_error( "make_imgur_album(): Couldn't mirror $img; undef" );
          }
-         if ( $mirror->{data}->{error} and (
+         if ( $mirror eq 'TOO_LARGE' or
+              ($mirror->{data}->{error} and (
                $mirror->{data}->{error} =~ /^Image is larger than / or
-               $mirror->{data}->{error} =~ /^Animated GIF is larger than / ) ) {
+               $mirror->{data}->{error} =~ /^Animated GIF is larger than / )) ) {
             log_error( "make_imgur_album(): Couldn't mirror $img; TOO_LARGE" );
             delete_imgur_album( $r, $album->{data}->{deletehash} );
             return undef;
@@ -806,6 +810,16 @@ sub mirror_da {
       "$da_image->{title} by $da_image->{author_name}",
       "This image was reuploaded by a bot on reddit.com/r/$conf->{subreddit} from Deviantart. The original can be found here: $da_link"
    );
+
+   if ( $mirror eq 'TOO_LARGE' ) {
+      $da_image = get_da( $da, $da_link, 1 );
+      $mirror = make_imgur_mirror(
+         $r,
+         $da_image->{url},
+         "$da_image->{title} by $da_image->{author_name}",
+         "This image was reuploaded by a bot on reddit.com/r/$conf->{subreddit} from Deviantart. The original can be found here: $da_link"
+      );
+   }
 
    if ( $mirror or $gfy_mirror ) {
       $mirror->{gfy} = $gfy_mirror;
@@ -1010,7 +1024,7 @@ foreach my $post ( @{$posts->{data}->{children}} ) {
       next;
    }
    foreach my $comment ( @{$comments->[1]->{data}->{children}} ) {
-      if ( $comment->{data}->{author} =~ /^\Q$conf->{reddit_account}\E$/i ) {
+      if ( $comment->{kind} ne 'more' && $comment->{data}->{author} =~ /^\Q$conf->{reddit_account}\E$/i ) {
          $did_it = 1;
          last;
       }
